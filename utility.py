@@ -50,8 +50,8 @@ class Frame:
         Parameters
         ----------
         adaptive_thresh_params : dict, optional
-            This dictionary contain the parameters in order to apply
-            adaptive thresholding. Standard parameter are testet for sprecific
+            This dictionary contains the parameters in order to apply
+            adaptive thresholding. Standard parameter are testet for specific
             setting. The default is None.
 
         Raises
@@ -161,3 +161,78 @@ class Frame:
                         max_rect.pop(0)
                     max_rect.append(approx)
         return max_rect
+    
+    @staticmethod
+    def tune_threshold_params(frame: np.ndarray) -> dict:
+        """
+        Opens an interactive window with trackbars to adjust adaptive threshold
+        parameters. Returns the user-defined parameters as a dictionary.
+        """
+        def nothing(x):
+            pass
+
+        # Create a window
+        cv.namedWindow('Tuning Adaptive Threshold', cv.WINDOW_NORMAL)
+
+        # Initialize trackbars
+        cv.createTrackbar(
+            'Block Size',
+            'Tuning Adaptive Threshold', 21, 101, nothing)
+        cv.createTrackbar(
+            'C',
+            'Tuning Adaptive Threshold', 5, 50, nothing)
+        cv.createTrackbar(
+            'Max Value',
+            'Tuning Adaptive Threshold', 255, 255, nothing)
+        cv.createTrackbar(
+            'Threshold Type',
+            'Tuning Adaptive Threshold', 0, 1, nothing)
+        
+
+        while True:
+            # Get current trackbar values
+            block_size = cv.getTrackbarPos(
+                'Block Size', 'Tuning Adaptive Threshold')
+            threshold_const = cv.getTrackbarPos(
+                'C', 'Tuning Adaptive Threshold')
+            max_value = cv.getTrackbarPos(
+                'Max Value', 'Tuning Adaptive Threshold')
+            threshold_type = cv.getTrackbarPos(
+                'Threshold Type', 'Tuning Adaptive Threshold')
+
+            # Ensure block_size is odd and >= 3
+            block_size = max(3, block_size | 1)
+
+            # Define adaptive threshold parameters
+            params = {
+                'max_value': max_value,
+                'adaptive_method': cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                'threshold_type': cv.THRESH_BINARY,
+                'block_size': block_size,
+                'threshold_const': threshold_const
+            }
+            
+            if threshold_type == 1:
+                params['threshold_type'] = cv.THRESH_BINARY_INV
+
+            # Apply adaptive threshold with current parameters
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            processed_frame = cv.adaptiveThreshold(
+                src=gray,
+                maxValue=params['max_value'],
+                adaptiveMethod=params['adaptive_method'],
+                thresholdType=params['threshold_type'],
+                blockSize=params['block_size'],
+                C=params['threshold_const']
+            )
+
+            # Display the processed frame
+            cv.imshow('Tuning Adaptive Threshold', processed_frame)
+
+            # Break the loop on 'ESC' key
+            key = cv.waitKey(10) & 0xFF
+            if key == 27:  # ESC key
+                break
+
+        cv.destroyAllWindows()
+        return params

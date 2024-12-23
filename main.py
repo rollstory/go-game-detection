@@ -1,77 +1,89 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from go_board import GoBoard
-from stone_detection import StoneDetection
+"""Driver Code."""
+
+from line import Line
+from transformation import Transformation
 
 import cv2 as cv
 import numpy as np
 
 
 channel = 2
-radius = 8
-delay = 3
-bounds = (480, 640)
-intensity_threshold_dark = 35
-intensity_threshold_light = -50
 
-go_board = GoBoard(channel)
-fields = go_board.fields
-coordinates = go_board.coordinates
-board_size = go_board.go_board_params.get('board_size')
+Line.outer_points(channel)
+outer_pts = Line.outer_pts
+bounding_lines = Line.bounding_lines
+vertical_lines, hor_grid = Line.create_vertical_lines(19)
 
-circles = StoneDetection.all_circle_environments(
-    board_size,
-    coordinates,
-    bounds,
-    radius=radius)
+longest_bounding_line = max(bounding_lines, key=lambda x: x.length_squared)
 
-avg_env_intensity = StoneDetection.measure_avg_intensitiy(
-    circles,
-    coordinates,
-    radius,
-    channel,
-    delay)
+transformation = Transformation()
 
-cap = cv.VideoCapture(channel)
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Can't receive frame (stream end?). Exiting ...")
-        break
-    try:
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        avg_env_intensity_check = StoneDetection.avg_env_intensity(
-            gray,
-            circles,
-            coordinates,
-            radius)
-        errors = avg_env_intensity_check - avg_env_intensity
-        for i in range(len(errors)):
-            for j in range(len(errors)):
-                print(errors)
-                if errors[i][j] <= intensity_threshold_light:
-                    print(coordinates[i][j][1])
-                    cv.circle(
-                        frame,
-                        [coordinates[i][j][1][1], coordinates[i][j][1][0]],
-                        5,
-                        (125, 125, 0), -1)
+transform_longest_bounding_line_pts = transformation.transform_lowest_line(
+    longest_bounding_line.x_start,
+    longest_bounding_line.y_start,
+    longest_bounding_line.x_end,
+    longest_bounding_line.y_end,
+    )
 
-                if errors[i][j] >= intensity_threshold_dark:
-                    print(coordinates[i][j][1])
-                    cv.circle(
-                        frame,
-                        [coordinates[i][j][1][1], coordinates[i][j][1][0]],
-                        5,
-                        (0, 125, 125),
-                        -1)
+lower_hor_line = Line(
+    transform_longest_bounding_line_pts[0],
+    transform_longest_bounding_line_pts[1],
+    transform_longest_bounding_line_pts[2],
+    transform_longest_bounding_line_pts[3])
 
-        cv.imshow('frame', frame)
-        if cv.waitKey(1) == ord('q'):
-            break
-    except Exception as e:
-        print(e)
-        break
+vertical_shift = np.round(
+    np.sqrt(lower_hor_line.length_squared)).astype(np.int32)
 
-cap.release()
+lower_hor_line_shift = np.int32((640 - vertical_shift) / 2)
+
+calib_vertical_grid = np.round(
+    np.linspace(
+        lower_hor_line_shift,
+        lower_hor_line_shift + vertical_shift,
+        num=19, endpoint=True)).astype(np.int32)
+
+calib_horizontal_lines = [
+    Line(lower_hor_line.x_start, y, lower_hor_line.x_end, y)
+    for y in calib_vertical_grid]
+
+calib_horizontal_grid = np.round(
+    np.linspace(
+        lower_hor_line.x_start,
+        lower_hor_line.x_end,
+        num=19, endpoint=True)).astype(np.int32)
+
+calib_vertical_lines = [
+    Line(
+        x, calib_horizontal_lines[0].y_start,
+        x, calib_horizontal_lines[-1].y_start)
+    for x in calib_horizontal_grid]
+
+found_board_lines = [
+    *[line for line in bounding_lines if np.abs(line.slope) < 1],
+    *vertical_lines
+    ]
+
+calib_intersections = np.array(
+    [np.array([i, j])
+     for j in calib_vertical_grid
+     for i in calib_horizontal_grid],
+    dtype=np.int32
+    )
+
+for line in vertical_lines:
+    pass
+
+black = np.zeros((480, 640, 3), dtype=np.uint8)
+Line.draw_lines(found_board_lines, black)
+
+black_copy = np.zeros((640, 640, 3), dtype=np.uint8)
+Line.draw_lines(calib_horizontal_lines, black_copy)
+Line.draw_lines(calib_vertical_lines, black_copy)
+
+cv.imshow('black', black)
+cv.imshow('black_copy', black_copy)
+
+cv.waitKey(0)
 cv.destroyAllWindows()

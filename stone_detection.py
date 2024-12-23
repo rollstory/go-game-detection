@@ -33,37 +33,31 @@ class StoneDetection():
     @staticmethod
     def all_circle_environments(
             board_size: int,
-            coordinates: list,
+            fields: np.ndarray,
             bounds: tuple,
             radius: int) -> np.ndarray:
 
-        circles = []
-        for i in range(len(coordinates)):
-            row = []
-            for j in range(len(coordinates[i])):
-                row.append(
-                    StoneDetection.circle_points(
-                        coordinates[i][j][1],
-                        bounds,
-                        radius))
-            circles.append(row)
+        circles = [
+            [StoneDetection.circle_points(fields[i][j], bounds, radius)
+             for j in range(len(fields[i]))]
+            for i in range(len(fields))]
         return circles
 
     @staticmethod
     def avg_env_intensity(
             gray: np.ndarray,
             circles: list,
-            coordinates: list,
+            fields: list,
             radius: int) -> list:
 
         avg_env_intensities = []
-        for i in range(len(coordinates)):
+        for i in range(len(fields)):
             row = []
-            for j in range(len(coordinates)):
+            for j in range(len(fields)):
                 intensities = np.array(
                         [gray[circles[i][j][k][0]][circles[i][j][k][1]]
                          for k in range(len(circles[i][j]))])
-                avg = np.int32(np.round(np.sum(intensities) / len(intensities)))
+                avg = np.int32(np.round(np.sum(intensities)/len(intensities)))
                 row.append(avg)
             avg_env_intensities.append(row)
         return np.array(avg_env_intensities)

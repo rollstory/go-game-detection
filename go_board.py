@@ -4,8 +4,9 @@ from line import Line
 from utility import Frame
 
 from dataclasses import dataclass
-import cv2 as cv
 import numpy as np
+import cv2 as cv
+#from bigtree import Node, list_to_tree
 
 
 @dataclass
@@ -13,75 +14,41 @@ class GoBoard:
 
     go_board_params = {
         'board_size': 19,
-        'min_line_length': 200,
+        'min_line_length': 150,
         'horizontal_slope': 0.5,
         'vertical_slope': 2,
-        'epsilon_unify': 5,
+        'epsilon_unify': 8,
         }
 
-    def __init__(self, channel: int, go_board_params: dict = None):
-        while True:
-            if go_board_params is None:
-                go_board_params = GoBoard.go_board_params
-                self.go_board_params = go_board_params
-            else:
-                self.go_board_params = go_board_params
+    def __init__(self, channel: int, board_size: int, handicap: int):
+        self.board_size = board_size
+        self.board_dim = (
+            GoBoard.go_board_params.get('board_size'),
+            GoBoard.go_board_params.get('board_size'))
+        Line.outer_points(channel)
+        self.handicap = handicap
+        self.fields = self.go_board_grid(channel)
+        self.coordinates = self.get_grid_coordinates()
+        self.tracker = np.zeros(self.board_dim, dtype=np.uint8)
+        self.number_moves = 0
+        self.game_state = []
 
-            Line.outer_points(channel)
-            self.fields = GoBoard.go_board_intersections(
-                channel,
-                min_line_length=go_board_params.get('min_line_length'),
-                horizontal_slope=go_board_params.get('horizontal_slope'),
-                vertical_slope=go_board_params.get('vertical_slope'),
-                epsilon_unify=go_board_params.get('epsilon_unify'),
-                board_size=go_board_params.get('board_size'))
-            try:
-                self.coordinates = self.get_field_coordinates(
-                    self.go_board_params.get('epsilon_unify'))
-                if len(self.coordinates) != self.go_board_params.get(
-                        'board_size'):
-                    raise ValueError('coordinates not set properly')
-                break
-            except Exception as e:
-                print(e)
-
-    def go_board_intersections(
-            channel: int,
-            min_line_length: int,
-            horizontal_slope: float,
-            vertical_slope: float,
-            epsilon_unify: int,
-            board_size: int) -> list:
+    def go_board_grid(self, channel: int) -> np.ndarray:
         """
-        generates the fields of a go board from image with the help of the
-        Line class
-
         Parameters
         ----------
         channel : int
             Channel of the webacam.
-        min_line_length : int
-            minimal length of the found lines that pass filtering.
-        horizontal_slope : float
-            The slope that is supposed resemble horizontal lines
-            (Approximation). Think about errors that are made when the lines
-            are not actually horizontal due to camera angle and camera
-            direction.
-        vertical_slope : float
-            The slope that is supposed resemble vertical lines (Approximation).
-            Think about errors that are made when the lines are not actually
-            vertical due to camera angle and camera direction.
-        epsilon_unify : int
-            epsilon to determine if two lines represent the same line on the
-            board.
-        board_size : int
-            Board size.
 
         Returns
         -------
-        list
-            intersection of the found lines, resembles fields.
+        np.ndarray
+            grid of the board.
+
         """
+        
+        vertical_lines, hor_grid = Line.create_vertical_lines(self.board_size)
+                
         cap = cv.VideoCapture(channel)
         if not cap.isOpened():
             print("Cannot open camera")
@@ -91,119 +58,177 @@ class GoBoard:
             if not ret:
                 print("Can't receive frame (stream end?). Exiting ...")
                 break
-            try:
+
+            key = cv.waitKey(10) & 0xFF
+            try:       
                 adaptive_thresh = Frame(frame).adaptive_thresh()
+
                 lines = Line.hough_lines_p(adaptive_thresh)
-                for line in lines:
-                    line.filter_line(
-                        min_line_length=min_line_length,
-                        horizontal_slope=horizontal_slope,
-                        vertical_slope=vertical_slope)
+                
+                line_params = self.go_board_params
+                
+                unique_horizontal_lines = Line.process_horizontal_lines(
+                    lines,
+                    line_params,
+                    frame.shape
+                    )
 
-                extended_horizontal_lines = [line.extend_line(frame.shape)
-                                             for line in Line.horizontal_lines]
-                extended_vertical_lines = [line.extend_line(frame.shape)
-                                           for line in Line.vertical_lines]
+                if len(unique_horizontal_lines) == self.board_size:
+                    unique_horizontal_lines.pop(0)
+                    unique_horizontal_lines.pop(-1)                
 
-                sorted_horizontal_lines = Line.sort_horizontal_lines(
-                    extended_horizontal_lines)
-                sorted_vertical_lines = Line.sort_vertical_lines(
-                    extended_vertical_lines)
+                intersections = []
+                for line in unique_horizontal_lines:
+                    inter, _ = Line.line_intersections(
+                        [line, *vertical_lines])
+                    intersections.append(inter)
+                
+                frame_copy = frame.copy()
+                Line.draw_lines(vertical_lines, frame_copy)
+                    
+                Line.draw_intersections(intersections, frame)
+                cv.imshow('intersections', frame)
+                cv.imshow('lines', frame_copy)
 
-                unique_horizontal_lines = Line.unique_horizontal_lines(
-                    sorted_horizontal_lines,
-                    epsilon_unify)
-                unique_vertical_lines = Line.unique_vertical_lines(
-                    sorted_vertical_lines,
-                    epsilon_unify)
-
-                unique_horizontal_lines = [line
-                                           for line in unique_horizontal_lines
-                                           if line.is_outer_line()]
-                unique_vertical_lines = [line
-                                         for line in unique_vertical_lines
-                                         if line.is_outer_line()]
-
-                intersections, _ = Line.line_intersections(
-                    [*unique_horizontal_lines, *unique_vertical_lines])
+                if len(intersections) == self.board_size-2 and all(
+                        [len(_i) == self.board_size for _i in intersections]):
+                    intersections.insert(0, hor_grid[0])
+                    intersections.append(hor_grid[1])
+                    break
 
                 Line.horizontal_lines.clear()
                 Line.vertical_lines.clear()
 
-                if len(intersections) == board_size ** 2:
+                if key == ord('q'):
                     break
-
             except Exception as e:
                 print(e)
-                break
+
         cap.release()
         cv.destroyAllWindows()
 
-        if intersections:
-            return intersections
-        else:
-            return []
+        return np.array(intersections)
 
-    def get_field_coordinates(self, epsilon: int) -> list:
-        """
-        Assigns coordinate names to the found points
+    def get_grid_coordinates(self):
+        return [[(chr(97 + i) + chr(97 + j), self.fields[i][j])
+                 for j in range(len(self.fields[i]))]
+                for i in range(len(self.fields))]
 
-        Parameters
-        ----------
-        epsilon : int
-            Threshold value in order to measure distances between points and
-            coordinate components.
+    def update_tracker(
+            self,
+            errors: np.ndarray,
+            intensity_threshold_light: int,
+            intensity_threshold_dark: int,
+            frame: np.ndarray):
 
-        Returns
-        -------
-        list
-            List of tuples: [(str, [x,y])].
+        for i in range(self.board_size):
+            for j in range(self.board_size):
+                if errors[i][j] <= intensity_threshold_light:
+                    # visualisation
+                    cv.circle(
+                        frame,
+                        [self.fields[i][j][1], self.fields[i][j][0]],
+                        5,
+                        (125, 125, 0), -1)
 
-        """
+                    self.tracker[i][j] = 2
 
-        fields = self.fields.copy()
-        bound = self.go_board_params.get('board_size')
+                if errors[i][j] >= intensity_threshold_dark:
+                    # visualisation
+                    cv.circle(
+                        frame,
+                        [self.fields[i][j][1], self.fields[i][j][0]],
+                        5,
+                        (125, 0, 125),
+                        -1)
 
-        distances = [np.linalg.norm([
-            self.fields[i][0] - self.fields[i-1][0],
-            self.fields[i][1] - self.fields[i-1][1]]) for i in range(
-                1, len(self.fields))]
-        distances.sort()
+                    self.tracker[i][j] = 1
 
-        for index in range(len(distances)-1):
-            if distances[index+1] - distances[index] > epsilon:
-                max_dist = distances[index]
-                break
+                if errors[i][j] > intensity_threshold_light \
+                        and errors[i][j] < intensity_threshold_dark:
+                    self.tracker[i][j] = 0
 
-        coordinates = []
-        col = []
+    @staticmethod
+    def is_neighbor(field_a: list, field_b: list) -> bool:
+        return (abs(field_a[0]-field_b[0]) == 1 and field_a[1] == field_b[1]) \
+            or (abs(field_a[1]-field_b[1]) == 1 and field_a[0] == field_b[0])
 
-        for i in range(bound):
-            if not col and not coordinates:
-                col.append((chr(97) + chr(97), fields[0]))
-                fields.pop(0)
-            if not col:
-                for pt in fields:
-                    if np.linalg.norm(
-                            np.array(coordinates[i-1][0][1]) - np.array(pt)) <= max_dist and np.abs(
-                                coordinates[i-1][0][1][1] - pt[1]) <= 2*epsilon:
-                        col.append((chr(97 + i) + chr(97), pt))
-                        index = fields.index(pt)
-                        fields.pop(index)
-                        break
-            if col:
-                for j in range(bound-1):
-                    for pt in fields:
-                        if np.linalg.norm(
-                                np.array(col[-1][1]) - np.array(pt)) <= max_dist and np.abs(
-                                    col[-1][1][0] - pt[0]) <= epsilon:
-                            col.append((chr(97 + i) + chr(97 + j+1), pt))
-                            index = fields.index(pt)
-                            fields.pop(index)
-                            break
-                coordinates.append(col)
-                col = []
-        if coordinates:
-            return coordinates
-        else:
-            return []
+    def define_groups(self):
+        white_groups = []
+        black_groups = []
+        visited = set()
+
+        def add_to_group(groups, i, j):
+            for group in groups:
+                for stone in group:
+                    if self.is_neighbor(stone, (i, j)):
+                        group.add((i, j))
+                        return
+            groups.append(set([(i, j)]))
+
+        def delete_from_group(groups, i, j):
+            for group in groups:
+                if (i, j) in group:
+                    group.remove((i, j))
+                    return
+
+        for i in range(self.board_size):
+            for j in range(self.board_size):
+                if (i, j) in visited:
+                    continue
+
+                if self.tracker[i][j] == 0:
+                    visited.add((i, j))
+                    delete_from_group(white_groups, i, j)
+                    delete_from_group(black_groups, i, j)
+                elif self.tracker[i][j] == 1:
+                    add_to_group(black_groups, i, j)
+                    visited.add((i, j))
+                elif self.tracker[i][j] == 2:
+                    add_to_group(white_groups, i, j)
+                    visited.add((i, j))
+
+        return list(visited), black_groups, white_groups
+
+    def verify_tracker(self):
+        visited, black_groups, white_groups = self.define_groups()
+
+        def count_liberties(stone, visited):
+            liberties = 0
+            neighbors = [(stone[0] + 1, stone[1]), (stone[0] - 1, stone[1]),
+                         (stone[0], stone[1] + 1), (stone[0], stone[1] - 1)]
+            for neighbor in neighbors:
+                if neighbor in visited:
+                    liberties += 1
+            return liberties
+
+        def count_captured_stones(groups):
+            stones_captured = 0
+            for group in groups[:]:
+                liberties = sum(count_liberties(stone, visited)
+                                for stone in group)
+                if liberties == 0:
+                    stones_captured += len(group)
+                    groups.remove(group)
+            return stones_captured
+
+        def valid_tracker(visited, black_groups, white_groups):
+            black_stones_captured = count_captured_stones(black_groups)
+            white_stones_captured = count_captured_stones(white_groups)
+            black_stones = sum(len(group) for group in black_groups)
+            white_stones = sum(len(group) for group in white_groups)
+
+            if black_stones + black_stones_captured \
+                    == white_stones + white_stones_captured:
+                return True
+            if black_stones + black_stones_captured \
+                    == white_stones + white_stones_captured + self.handicap:
+                return True
+            return False
+
+        return valid_tracker(visited, black_groups, white_groups)
+
+"""    def set_game_state(self):
+        if self.track_game():
+            if self.game_state == []:
+                root = Node()"""
